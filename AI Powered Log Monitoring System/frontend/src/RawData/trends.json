@@ -1,0 +1,8 @@
+[
+  { "time": "12:00", "errors": 2 },
+  { "time": "12:05", "errors": 5 },
+  { "time": "12:10", "errors": 3 },
+  { "time": "12:15", "errors": 8 },
+  { "time": "12:20", "errors": 12 },
+  { "time": "12:25", "errors": 6 }
+]

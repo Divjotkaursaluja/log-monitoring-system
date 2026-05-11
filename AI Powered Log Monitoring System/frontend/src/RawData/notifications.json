@@ -1,0 +1,10 @@
+[
+  {
+    "message": "Email alert sent to admin",
+    "time": "2026-01-10T12:32:00"
+  },
+  {
+    "message": "Slack notification triggered",
+    "time": "2026-01-10T12:33:10"
+  }
+]

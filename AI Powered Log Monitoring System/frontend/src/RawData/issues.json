@@ -1,0 +1,14 @@
+[
+  {
+    "service": "payment-service",
+    "error_count": 45
+  },
+  {
+    "service": "auth-service",
+    "error_count": 30
+  },
+  {
+    "service": "notification-service",
+    "error_count": 15
+  }
+]

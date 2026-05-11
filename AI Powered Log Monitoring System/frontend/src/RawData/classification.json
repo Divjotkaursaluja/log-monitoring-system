@@ -1,0 +1,14 @@
+[
+  {
+    "type": "Login Issues",
+    "count": 30
+  },
+  {
+    "type": "Payment Errors",
+    "count": 12
+  },
+  {
+    "type": "Server Failures",
+    "count": 8
+  }
+]
