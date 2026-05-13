@@ -1,7 +1,11 @@
 import CountCards from "../components/CountCards";
 import LogTable from "../components/LogTable";
 import useLogs from "../hooks/useLogs";
-
+import TrendChart from "../components/TrendChart";
+import Notifications from "../components/Notifications";
+import TopIssues from "../components/TopIssues";
+import HealthStatus from "../components/HealthStatus";
+import AlertsPanel from "../components/AlertsPanel";
 const Dashboard = () => {
   const { logs, metrics, loading, error, lastUpdated, refresh } = useLogs(3000);
 
@@ -42,7 +46,20 @@ const Dashboard = () => {
         )}
 
         <CountCards metrics={metrics} />
-        <LogTable logs={logs} loading={loading} />
+
+<div className="grid gap-4 lg:grid-cols-2">
+  <HealthStatus />
+  <AlertsPanel />
+</div>
+
+<TrendChart />
+
+<LogTable logs={logs} loading={loading} />
+
+<div className="grid gap-4 lg:grid-cols-2">
+  <TopIssues />
+  <Notifications />
+</div>
       </div>
     </main>
   );

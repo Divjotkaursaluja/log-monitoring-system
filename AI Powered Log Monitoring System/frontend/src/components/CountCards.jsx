@@ -1,10 +1,9 @@
 const cards = [
-  { key: "total", label: "Total Logs", accent: "border-cyan-400/50 text-cyan-200" },
-  { key: "errors", label: "Total Errors", accent: "border-red-400/50 text-red-200" },
-  { key: "warnings", label: "Total Warnings", accent: "border-yellow-300/60 text-yellow-100" },
-  { key: "info", label: "Total Info Logs", accent: "border-green-400/50 text-green-200" },
+  { key: "total_logs", label: "Total Logs", accent: "border-cyan-400/50 text-cyan-200" },
+  { key: "total_errors", label: "Total Errors", accent: "border-red-400/50 text-red-200" },
+  { key: "total_warnings", label: "Total Warnings", accent: "border-yellow-300/60 text-yellow-100" },
+  { key: "total_info", label: "Total Info Logs", accent: "border-green-400/50 text-green-200" },
 ];
-
 const CountCards = ({ metrics }) => {
   return (
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

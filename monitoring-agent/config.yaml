@@ -1,0 +1,19 @@
+backend_url: http://127.0.0.1:8000
+
+service_name: civic-issue-system
+
+from_start: false
+
+heartbeat_interval_seconds: 30
+retry_interval_seconds: 5
+request_timeout_seconds: 5
+
+log_files:
+  - C:/Users/Divjot/Desktop/civic_project/civicbackend/app.log
+  - C:/logs/auth.log
+  - C:/logs/payment.log
+  - C:/logs/transaction.log
+  - C:/logs/security.log
+  - C:/logs/app.log
+  - C:/logs/payment.log
+  - C:/logs/security.log
