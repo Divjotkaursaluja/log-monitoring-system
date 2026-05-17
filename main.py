@@ -8,7 +8,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from alerts.engine import evaluate_alert, save_alert
+from ai_engine.schemas import LogContext, NormalizedLog
+from ai_engine.service import AIAnalysisService
 from db import get_connection
+from notification.service import notify_developers
 
 
 app = FastAPI(title="AI Powered Log Monitoring System")
@@ -22,6 +26,7 @@ app.add_middleware(
 )
 
 KNOWN_LEVELS = {"ERROR", "WARNING", "INFO"}
+ai_service: AIAnalysisService | None = None
 
 
 class AgentRegistrationRequest(BaseModel):
@@ -42,6 +47,19 @@ class HeartbeatIn(BaseModel):
     cpu_percent: float = Field(ge=0)
     ram_percent: float = Field(ge=0)
     disk_percent: float = Field(ge=0)
+
+
+class AIAnalyzeRequest(BaseModel):
+    level: str = "INFO"
+    message: str = Field(..., min_length=1)
+    service_name: str = Field(..., min_length=1)
+    timestamp: datetime | None = None
+
+
+class AlertStatusUpdate(BaseModel):
+    acknowledged: bool | None = None
+    resolved: bool | None = None
+    status: str | None = None
 
 
 def token_hash(token: str) -> str:
@@ -125,6 +143,53 @@ def init_schema():
         """
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_log_analysis (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            log_id INT NOT NULL,
+            predicted_category VARCHAR(100) NOT NULL,
+            predicted_severity VARCHAR(50) NOT NULL,
+            is_anomaly BOOLEAN NOT NULL DEFAULT FALSE,
+            anomaly_score FLOAT NULL,
+            confidence FLOAT NULL,
+            insight TEXT,
+            model_version VARCHAR(50) DEFAULT 'baseline-v1',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_ai_log_id (log_id),
+            INDEX idx_ai_category (predicted_category),
+            INDEX idx_ai_anomaly (is_anomaly),
+            CONSTRAINT fk_ai_log_analysis_log
+                FOREIGN KEY (log_id) REFERENCES logs(id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            log_id INT NOT NULL,
+            alert_type VARCHAR(100) NOT NULL,
+            severity VARCHAR(50) NOT NULL,
+            category VARCHAR(100) NOT NULL,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status VARCHAR(30) NOT NULL DEFAULT 'OPEN',
+            acknowledged BOOLEAN NOT NULL DEFAULT FALSE,
+            resolved BOOLEAN NOT NULL DEFAULT FALSE,
+            source_service VARCHAR(255) NOT NULL,
+            INDEX idx_alerts_log_id (log_id),
+            INDEX idx_alerts_status_created (status, created_at),
+            INDEX idx_alerts_severity (severity),
+            CONSTRAINT fk_alerts_log
+                FOREIGN KEY (log_id) REFERENCES logs(id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+
     ensure_column(cursor, "logs", "agent_id", "agent_id VARCHAR(64) NULL")
     ensure_column(cursor, "logs", "source_file", "source_file VARCHAR(500) NULL")
     ensure_column(cursor, "logs", "received_at", "received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
@@ -137,6 +202,124 @@ def init_schema():
 @app.on_event("startup")
 def startup():
     init_schema()
+
+
+def get_ai_service() -> AIAnalysisService:
+    global ai_service
+    if ai_service is None:
+        ai_service = AIAnalysisService()
+    return ai_service
+
+
+def get_recent_log_context(cursor, service_name: str) -> LogContext:
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM logs
+        WHERE service_name=%s
+          AND level='ERROR'
+          AND timestamp >= (CURRENT_TIMESTAMP - INTERVAL 5 MINUTE)
+        """,
+        (service_name,),
+    )
+    error_count = cursor.fetchone()["total"]
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM logs
+        WHERE service_name=%s
+          AND level='WARNING'
+          AND timestamp >= (CURRENT_TIMESTAMP - INTERVAL 5 MINUTE)
+        """,
+        (service_name,),
+    )
+    warning_count = cursor.fetchone()["total"]
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM logs
+        WHERE service_name=%s
+          AND timestamp >= (CURRENT_TIMESTAMP - INTERVAL 5 MINUTE)
+        """,
+        (service_name,),
+    )
+    service_log_count = cursor.fetchone()["total"]
+
+    return LogContext(
+        error_count=error_count,
+        warning_count=warning_count,
+        service_log_count=service_log_count,
+    )
+
+
+def save_ai_analysis(cursor, log_id: int, analysis):
+    cursor.execute(
+        """
+        INSERT INTO ai_log_analysis (
+            log_id,
+            predicted_category,
+            predicted_severity,
+            is_anomaly,
+            anomaly_score,
+            confidence,
+            insight,
+            model_version
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            log_id,
+            analysis.predicted_category,
+            analysis.predicted_severity,
+            analysis.is_anomaly,
+            analysis.anomaly_score,
+            analysis.confidence,
+            analysis.insight,
+            analysis.model_version,
+        ),
+    )
+
+
+def trigger_alert_if_needed(cursor, log_id: int, level: str, log: LogIn, service_name: str, analysis):
+    if not hasattr(analysis, "predicted_category"):
+        return None
+
+    decision = evaluate_alert(cursor, log_id, level, log.message, service_name, analysis)
+    if not decision.should_alert:
+        return None
+
+    alert_id = save_alert(cursor, log_id, service_name, decision)
+    alert_payload = {
+        "id": alert_id,
+        "log_id": log_id,
+        "alert_type": decision.alert_type,
+        "severity": decision.severity,
+        "category": decision.category,
+        "message": decision.message,
+        "source_service": service_name,
+        "reasons": decision.reasons,
+    }
+    notify_developers(alert_payload, decision.notify_email)
+    return alert_payload
+
+
+def print_ai_debug(log: LogIn, level: str, service_name: str, analysis):
+    if not hasattr(analysis, "predicted_category"):
+        print("AI analysis failed:", analysis)
+        return
+
+    print("Incoming log:")
+    print(log.message)
+    print("Prediction:")
+    print(f"category = {analysis.predicted_category}")
+    print(f"severity = {analysis.predicted_severity}")
+    print(f"anomaly = {analysis.is_anomaly}")
+    print(f"confidence = {analysis.confidence}")
+    print(f"anomaly_score = {analysis.anomaly_score}")
+    print(f"service = {service_name}")
+    print(f"stored_table = ai_log_analysis")
 
 
 def get_authorized_agent(authorization: Annotated[str | None, Header()] = None):
@@ -203,7 +386,7 @@ def add_log(log: LogIn, agent=Depends(get_authorized_agent)):
     service_name = log.service_name or agent["service_name"]
 
     conn = get_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     if log.timestamp:
         cursor.execute(
             """
@@ -220,11 +403,46 @@ def add_log(log: LogIn, agent=Depends(get_authorized_agent)):
             """,
             (level, log.message, service_name, agent["agent_id"], log.source_file),
         )
+    log_id = cursor.lastrowid
+
+    ai_analysis = None
+    alert_payload = None
+    try:
+        context = get_recent_log_context(cursor, service_name)
+        ai_analysis = get_ai_service().analyze_log(
+            NormalizedLog(
+                level=level,
+                message=log.message,
+                service_name=service_name,
+                timestamp=log.timestamp,
+            ),
+            context,
+        )
+        print_ai_debug(log, level, service_name, ai_analysis)
+        save_ai_analysis(cursor, log_id, ai_analysis)
+        alert_payload = trigger_alert_if_needed(cursor, log_id, level, log, service_name, ai_analysis)
+    except Exception as exc:
+        ai_analysis = {"error": f"AI analysis skipped: {exc}"}
+        print("AI analysis skipped:", exc)
+
     conn.commit()
     cursor.close()
     conn.close()
 
-    return {"message": "Log stored successfully", "level": level}
+    if hasattr(ai_analysis, "model_dump"):
+        ai_payload = ai_analysis.model_dump()
+    elif hasattr(ai_analysis, "dict"):
+        ai_payload = ai_analysis.dict()
+    else:
+        ai_payload = ai_analysis
+
+    return {
+        "message": "Log stored successfully",
+        "level": level,
+        "log_id": log_id,
+        "ai_analysis": ai_payload,
+        "alert": alert_payload,
+    }
 
 
 @app.post("/agent/heartbeat")
@@ -254,9 +472,24 @@ def get_logs(limit: int = Query(default=100, ge=1, le=1000)):
     cursor = conn.cursor(dictionary=True)
     cursor.execute(
         """
-        SELECT id, level, message, service_name, timestamp, agent_id, source_file
-        FROM logs
-        ORDER BY id DESC
+        SELECT
+            l.id,
+            l.level,
+            l.message,
+            l.service_name,
+            l.timestamp,
+            l.agent_id,
+            l.source_file,
+            a.predicted_category,
+            a.predicted_severity,
+            a.is_anomaly,
+            a.anomaly_score,
+            a.confidence,
+            a.insight,
+            a.model_version
+        FROM logs l
+        LEFT JOIN ai_log_analysis a ON a.log_id = l.id
+        ORDER BY l.id DESC
         LIMIT %s
         """,
         (limit,),
@@ -281,6 +514,10 @@ def get_metrics():
     total_info = cursor.fetchone()["total"]
     cursor.execute("SELECT COUNT(*) AS total FROM agents WHERE status='ONLINE'")
     online_agents = cursor.fetchone()["total"]
+    cursor.execute("SELECT COUNT(*) AS total FROM alerts WHERE resolved = FALSE")
+    active_alerts = cursor.fetchone()["total"]
+    cursor.execute("SELECT COUNT(*) AS total FROM alerts WHERE severity='CRITICAL' AND resolved = FALSE")
+    critical_incidents = cursor.fetchone()["total"]
     cursor.close()
     conn.close()
 
@@ -294,6 +531,8 @@ def get_metrics():
         "warnings": total_warnings,
         "info": total_info,
         "online_agents": online_agents,
+        "active_alerts": active_alerts,
+        "critical_incidents": critical_incidents,
     }
 
 
@@ -320,20 +559,237 @@ def get_alerts():
     cursor = conn.cursor(dictionary=True)
     cursor.execute(
         """
-        SELECT level, message
-        FROM logs
-        WHERE level IN ('ERROR', 'WARNING')
-        ORDER BY id DESC
+        SELECT
+            id,
+            log_id,
+            alert_type,
+            severity,
+            category,
+            message,
+            created_at,
+            status,
+            acknowledged,
+            resolved,
+            source_service
+        FROM alerts
+        WHERE resolved = FALSE
+        ORDER BY created_at DESC
         LIMIT 10
         """
     )
-    alerts = [
-        {"severity": "high" if row["level"] == "ERROR" else "medium", "message": row["message"]}
-        for row in cursor.fetchall()
-    ]
+    alerts = cursor.fetchall()
     cursor.close()
     conn.close()
     return alerts
+
+
+@app.get("/api/alerts/history")
+def get_alert_history(limit: int = Query(default=100, ge=1, le=500)):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT
+            id,
+            log_id,
+            alert_type,
+            severity,
+            category,
+            message,
+            created_at,
+            status,
+            acknowledged,
+            resolved,
+            source_service
+        FROM alerts
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    alerts = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return alerts
+
+
+@app.patch("/api/alerts/{alert_id}")
+def update_alert(alert_id: int, payload: AlertStatusUpdate):
+    updates = []
+    values = []
+    if payload.acknowledged is not None:
+        updates.append("acknowledged=%s")
+        values.append(payload.acknowledged)
+    if payload.resolved is not None:
+        updates.append("resolved=%s")
+        values.append(payload.resolved)
+    if payload.status is not None:
+        updates.append("status=%s")
+        values.append(payload.status)
+
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No alert fields supplied")
+
+    values.append(alert_id)
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(f"UPDATE alerts SET {', '.join(updates)} WHERE id=%s", tuple(values))
+    if cursor.rowcount == 0:
+        conn.rollback()
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
+    conn.commit()
+    cursor.execute(
+        """
+        SELECT id, log_id, alert_type, severity, category, message, created_at, status,
+               acknowledged, resolved, source_service
+        FROM alerts
+        WHERE id=%s
+        """,
+        (alert_id,),
+    )
+    alert = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return alert
+
+
+@app.post("/api/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: int):
+    return update_alert(alert_id, AlertStatusUpdate(acknowledged=True, status="ACKNOWLEDGED"))
+
+
+@app.post("/api/alerts/{alert_id}/resolve")
+def resolve_alert(alert_id: int):
+    return update_alert(alert_id, AlertStatusUpdate(acknowledged=True, resolved=True, status="RESOLVED"))
+
+
+@app.post("/api/ai/analyze-log")
+def analyze_log_preview(payload: AIAnalyzeRequest):
+    level = classify_severity(payload.message, payload.level)
+    analysis = get_ai_service().analyze_log(
+        NormalizedLog(
+            level=level,
+            message=payload.message,
+            service_name=payload.service_name,
+            timestamp=payload.timestamp,
+        )
+    )
+    return analysis
+
+
+@app.get("/api/ai/insights")
+def get_ai_insights(limit: int = Query(default=50, ge=1, le=500)):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT
+            l.id AS log_id,
+            l.level,
+            l.message,
+            l.service_name,
+            l.timestamp,
+            a.predicted_category,
+            a.predicted_severity,
+            a.is_anomaly,
+            a.anomaly_score,
+            a.confidence,
+            a.insight,
+            a.model_version,
+            a.created_at
+        FROM ai_log_analysis a
+        JOIN logs l ON l.id = a.log_id
+        ORDER BY a.id DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    insights = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return insights
+
+
+@app.get("/api/ai/logs/{log_id}/analysis")
+def get_log_ai_analysis(log_id: int):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT
+            l.id AS log_id,
+            l.level,
+            l.message,
+            l.service_name,
+            l.timestamp,
+            a.predicted_category,
+            a.predicted_severity,
+            a.is_anomaly,
+            a.anomaly_score,
+            a.confidence,
+            a.insight,
+            a.model_version,
+            a.created_at
+        FROM ai_log_analysis a
+        JOIN logs l ON l.id = a.log_id
+        WHERE l.id = %s
+        ORDER BY a.id DESC
+        LIMIT 1
+        """,
+        (log_id,),
+    )
+    analysis = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not analysis:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI analysis not found")
+
+    return analysis
+
+
+@app.get("/api/ai/anomalies")
+def get_ai_anomalies(limit: int = Query(default=50, ge=1, le=500)):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT
+            l.id AS log_id,
+            l.level,
+            l.message,
+            l.service_name,
+            l.timestamp,
+            a.predicted_category,
+            a.predicted_severity,
+            a.anomaly_score,
+            a.insight,
+            a.created_at
+        FROM ai_log_analysis a
+        JOIN logs l ON l.id = a.log_id
+        WHERE a.is_anomaly = TRUE
+        ORDER BY a.id DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    anomalies = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return anomalies
+
+
+@app.get("/api/ai/service-health")
+def get_ai_service_health():
+    service = get_ai_service()
+    return {
+        "status": "ready",
+        "model_version": service.model_version,
+        "classifier": service.classifier.__class__.__name__,
+        "anomaly_detector": service.anomaly_detector.__class__.__name__,
+    }
 
 
 @app.get("/api/health")
@@ -378,7 +834,15 @@ def get_issues():
 def get_notifications():
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT message FROM logs ORDER BY id DESC LIMIT 5")
+    cursor.execute(
+        """
+        SELECT message, severity, category, created_at
+        FROM alerts
+        WHERE resolved = FALSE
+        ORDER BY created_at DESC
+        LIMIT 5
+        """
+    )
     rows = cursor.fetchall()
     cursor.close()
     conn.close()

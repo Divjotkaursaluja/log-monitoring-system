@@ -64,6 +64,12 @@ def save_state(state):
         json.dump(state, file, indent=2)
 
 
+def clear_state(reason):
+    if STATE_FILE.exists():
+        STATE_FILE.unlink()
+    print(f"Cleared agent registration state: {reason}")
+
+
 def auth_headers():
     state = load_state()
     token = state.get("token")
@@ -130,7 +136,17 @@ def send_payload(payload):
         headers=auth_headers(),
         timeout=REQUEST_TIMEOUT,
     )
+    if response.status_code == 401:
+        clear_state("backend rejected saved token while sending logs")
+        register_agent()
+        response = requests.post(
+            f"{BACKEND_URL}/logs",
+            json=payload,
+            headers=auth_headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
     response.raise_for_status()
+    print("backend response:", response.json())
 
 
 def retry_worker():
@@ -148,12 +164,14 @@ def retry_worker():
 
 
 def build_log_payload(line, source_file):
-    return {
+    payload = {
         "level": classify_log(line),
         "message": line.strip(),
         "service_name": SERVICE_NAME,
         "source_file": source_file,
     }
+    print("detected log:", payload)
+    return payload
 
 
 def follow_file(path):
@@ -162,22 +180,26 @@ def follow_file(path):
         print(f"Waiting for log file: {log_path}")
         time.sleep(5)
 
-    with open(log_path, "r", encoding="utf-8", errors="replace") as file:
-        if not FROM_START:
-            file.seek(0, os.SEEK_END)
+    offset = 0 if FROM_START else log_path.stat().st_size
+    print(f"Watching {log_path}")
 
-        print(f"Watching {log_path}")
-        while not stop_event.is_set():
-            line = file.readline()
-            if line:
-                if line.strip():
-                    send_queue.put(build_log_payload(line, str(log_path)))
-                continue
-
-            if file.tell() > log_path.stat().st_size:
+    while not stop_event.is_set():
+        try:
+            current_size = log_path.stat().st_size
+            if offset > current_size:
                 print(f"Detected rotation/truncation for {log_path}; reopening from start.")
-                file.seek(0)
-            time.sleep(1)
+                offset = 0
+
+            with open(log_path, "r", encoding="utf-8", errors="replace") as file:
+                file.seek(offset)
+                for line in file:
+                    if line.strip():
+                        send_queue.put(build_log_payload(line, str(log_path)))
+                offset = file.tell()
+        except OSError as exc:
+            print(f"Unable to read {log_path}: {exc}")
+
+        time.sleep(1)
 
 
 def heartbeat_worker():
@@ -194,6 +216,15 @@ def heartbeat_worker():
                 headers=auth_headers(),
                 timeout=REQUEST_TIMEOUT,
             )
+            if response.status_code == 401:
+                clear_state("backend rejected saved token while sending heartbeat")
+                register_agent()
+                response = requests.post(
+                    f"{BACKEND_URL}/agent/heartbeat",
+                    json=payload,
+                    headers=auth_headers(),
+                    timeout=REQUEST_TIMEOUT,
+                )
             response.raise_for_status()
             print("heartbeat sent")
         except requests.RequestException as exc:

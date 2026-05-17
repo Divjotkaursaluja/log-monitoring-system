@@ -1,8 +1,8 @@
 {
-  "agent_id": "4bacc969-56d2-4d58-a899-7b39452abe6a",
-  "token": "547833ee-d4e8-44cb-93c8-e55fc37102d5",
-  "machine_name": "LAPTOP-4UGA0RE4",
+  "agent_id": "09238c17-67cd-4ba0-a36e-c943511884ca",
+  "token": "a11d431a-19eb-4169-8046-5be8b9a976f0",
+  "machine_name": "KUNAL",
   "service_name": "civic-issue-system",
-  "registered_at": "2026-05-13T17:58:08.016886",
+  "registered_at": "2026-05-17T16:40:47.696440",
   "platform": "Windows-11-10.0.26200-SP0"
 }
