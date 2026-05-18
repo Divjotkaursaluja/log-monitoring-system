@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from hashlib import sha256
+import os
 from socket import gethostname
 from typing import Annotated
 from uuid import uuid4
@@ -17,9 +18,15 @@ from notification.service import notify_developers
 
 app = FastAPI(title="AI Powered Log Monitoring System")
 
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

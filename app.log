@@ -6,3 +6,11 @@ ERROR API request timeout after 30 seconds
 ERROR Payment failed due to invalid transaction
 WARNING Duplicate retry detected
 CRITICAL Server overload detected
+ERROR Payment gateway timeout
+WARNING User login retry failed
+INFO User profile updated successfully
+CRITICAL Database connection failed
+ERROR API request timeout after 30 seconds
+ERROR Payment failed due to invalid transaction
+WARNING Duplicate retry detected
+CRITICAL Server overload detected
