@@ -6,17 +6,17 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: DB_HOST
+      - key: MYSQL_HOST
         sync: false
-      - key: DB_PORT
+      - key: MYSQL_PORT
         value: 3306
-      - key: DB_USER
+      - key: MYSQL_USER
         sync: false
-      - key: DB_PASSWORD
+      - key: MYSQL_PASSWORD
         sync: false
-      - key: DB_NAME
+      - key: MYSQL_DATABASE
         sync: false
-      - key: DB_SSL_CA
+      - key: MYSQL_SSL_CA
         sync: false
       - key: CORS_ORIGINS
         sync: false

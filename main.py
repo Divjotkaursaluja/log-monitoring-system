@@ -18,16 +18,16 @@ from notification.service import notify_developers
 
 app = FastAPI(title="AI Powered Log Monitoring System")
 
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
-    if origin.strip()
-]
+
+def get_cors_origins() -> list[str]:
+    raw_origins = os.getenv("CORS_ORIGINS", "*")
+    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins or ["*"],
-    allow_credentials=True,
+    allow_origins=get_cors_origins(),
+    allow_credentials="*" not in get_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -427,7 +427,10 @@ def add_log(log: LogIn, agent=Depends(get_authorized_agent)):
         )
         print_ai_debug(log, level, service_name, ai_analysis)
         save_ai_analysis(cursor, log_id, ai_analysis)
-        alert_payload = trigger_alert_if_needed(cursor, log_id, level, log, service_name, ai_analysis)
+        try:
+            alert_payload = trigger_alert_if_needed(cursor, log_id, level, log, service_name, ai_analysis)
+        except Exception as exc:
+            print("Alert evaluation skipped:", exc)
     except Exception as exc:
         ai_analysis = {"error": f"AI analysis skipped: {exc}"}
         print("AI analysis skipped:", exc)
