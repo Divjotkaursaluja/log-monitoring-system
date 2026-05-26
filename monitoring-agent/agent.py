@@ -33,6 +33,7 @@ def load_config():
 CONFIG = load_config()
 BACKEND_URL = CONFIG["backend_url"].rstrip("/")
 SERVICE_NAME = CONFIG["service_name"]
+ORGANIZATION_KEY = CONFIG.get("organization_key")
 LOG_FILES = CONFIG["log_files"]
 FROM_START = bool(CONFIG.get("from_start", False))
 HEARTBEAT_INTERVAL = int(CONFIG.get("heartbeat_interval_seconds", 30))
@@ -89,6 +90,8 @@ def register_agent():
         "service_name": SERVICE_NAME,
         "agent_version": AGENT_VERSION,
     }
+    if ORGANIZATION_KEY:
+        payload["organization_key"] = ORGANIZATION_KEY
     response = requests.post(
         f"{BACKEND_URL}/register-agent",
         json=payload,
@@ -164,42 +167,56 @@ def retry_worker():
 
 
 def build_log_payload(line, source_file):
+
+    clean_line = (
+        line.encode("utf-8", errors="ignore")
+            .decode("utf-8", errors="ignore")
+            .replace("\x00", "")
+            .replace("�", "")
+            .strip()
+    )
+
     payload = {
-        "level": classify_log(line),
-        "message": line.strip(),
+        "level": classify_log(clean_line),
+        "message": clean_line,
         "service_name": SERVICE_NAME,
         "source_file": source_file,
     }
+
     print("detected log:", payload)
+
     return payload
 
 
 def follow_file(path):
     log_path = Path(path)
+
     while not log_path.exists():
         print(f"Waiting for log file: {log_path}")
-        time.sleep(5)
+        time.sleep(2)
 
-    offset = 0 if FROM_START else log_path.stat().st_size
     print(f"Watching {log_path}")
 
-    while not stop_event.is_set():
-        try:
-            current_size = log_path.stat().st_size
-            if offset > current_size:
-                print(f"Detected rotation/truncation for {log_path}; reopening from start.")
-                offset = 0
+    with open(log_path, "r", encoding="utf-8", errors="replace") as file:
+    
 
-            with open(log_path, "r", encoding="utf-8", errors="replace") as file:
-                file.seek(offset)
-                for line in file:
-                    if line.strip():
-                        send_queue.put(build_log_payload(line, str(log_path)))
-                offset = file.tell()
-        except OSError as exc:
-            print(f"Unable to read {log_path}: {exc}")
+        # move to end only if from_start false
+        if not FROM_START:
+            file.seek(0, os.SEEK_END)
 
-        time.sleep(1)
+        while not stop_event.is_set():
+
+            line = file.readline()
+
+            if not line:
+                time.sleep(0.5)
+                continue
+
+            line = line.strip()
+
+            if line:
+                payload = build_log_payload(line, str(log_path))
+                send_queue.put(payload)
 
 
 def heartbeat_worker():

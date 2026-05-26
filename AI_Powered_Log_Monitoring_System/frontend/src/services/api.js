@@ -4,10 +4,22 @@ const API = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
 });
 
+API.interceptors.request.use((config) => {
+  const token = localStorage.getItem("access_token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 API.interceptors.response.use((response) => {
   console.log(`[API] ${response.config.method?.toUpperCase()} ${response.config.url}`, response.data);
   return response;
 });
+
+export const signup = (payload) => API.post("/auth/signup", payload);
+export const login = (payload) => API.post("/auth/login", payload);
+export const fetchMe = () => API.get("/auth/me");
 
 // Logs
 export const fetchLogs = () => API.get("/api/logs");

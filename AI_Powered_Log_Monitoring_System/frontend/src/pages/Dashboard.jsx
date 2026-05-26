@@ -7,7 +7,7 @@ import TopIssues from "../components/TopIssues";
 import HealthStatus from "../components/HealthStatus";
 import AlertsPanel from "../components/AlertsPanel";
 import AlertHistory from "../components/AlertHistory";
-const Dashboard = () => {
+const Dashboard = ({ session, onLogout }) => {
   const { logs, metrics, loading, error, lastUpdated, refresh } = useLogs(3000);
 
   return (
@@ -16,13 +16,16 @@ const Dashboard = () => {
         <header className="flex flex-col gap-4 border-b border-slate-800 pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm font-medium uppercase tracking-wide text-cyan-300">
-              Civic Issue System Observability
+              {session?.organization?.name || "Organization"} Observability
             </p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">
               AI Powered Log Monitoring System
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
               Real-time view of logs flowing from app.log into FastAPI and MySQL.
+            </p>
+            <p className="mt-2 text-xs text-slate-500">
+              Organization key: {session?.organization?.organization_key}
             </p>
           </div>
 
@@ -36,6 +39,13 @@ const Dashboard = () => {
               type="button"
             >
               Refresh
+            </button>
+            <button
+              className="rounded-md border border-slate-700 px-4 py-2 font-semibold text-slate-200 transition hover:border-slate-500"
+              onClick={onLogout}
+              type="button"
+            >
+              Logout
             </button>
           </div>
         </header>

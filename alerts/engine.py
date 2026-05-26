@@ -31,36 +31,50 @@ def _is_security_keyword_match(message: str) -> bool:
     return any(keyword in upper_message for keyword in SECURITY_KEYWORDS)
 
 
-def _recent_error_count(cursor, service_name: str) -> int:
+def _recent_error_count(cursor, service_name: str, organization_id: int | None = None) -> int:
+    org_filter = "AND organization_id=%s" if organization_id else ""
+    params = (service_name, organization_id) if organization_id else (service_name,)
     cursor.execute(
-        """
+        f"""
         SELECT COUNT(*) AS total
         FROM logs
         WHERE service_name=%s
+          {org_filter}
           AND level='ERROR'
           AND timestamp >= (CURRENT_TIMESTAMP - INTERVAL 5 MINUTE)
         """,
-        (service_name,),
+        params,
     )
     return cursor.fetchone()["total"]
 
 
-def _recent_anomaly_count(cursor, service_name: str) -> int:
+def _recent_anomaly_count(cursor, service_name: str, organization_id: int | None = None) -> int:
+    org_filter = "AND l.organization_id=%s" if organization_id else ""
+    params = (service_name, organization_id) if organization_id else (service_name,)
     cursor.execute(
-        """
+        f"""
         SELECT COUNT(*) AS total
         FROM ai_log_analysis a
         JOIN logs l ON l.id = a.log_id
         WHERE l.service_name=%s
+          {org_filter}
           AND a.is_anomaly = TRUE
           AND a.created_at >= (CURRENT_TIMESTAMP - INTERVAL 10 MINUTE)
         """,
-        (service_name,),
+        params,
     )
     return cursor.fetchone()["total"]
 
 
-def evaluate_alert(cursor, log_id: int, level: str, message: str, service_name: str, analysis) -> AlertDecision:
+def evaluate_alert(
+    cursor,
+    log_id: int,
+    level: str,
+    message: str,
+    service_name: str,
+    analysis,
+    organization_id: int | None = None,
+) -> AlertDecision:
     predicted_category = str(getattr(analysis, "predicted_category", "UNKNOWN"))
     predicted_severity = str(getattr(analysis, "predicted_severity", "LOW")).upper()
     is_anomaly = bool(getattr(analysis, "is_anomaly", False))
@@ -68,8 +82,8 @@ def evaluate_alert(cursor, log_id: int, level: str, message: str, service_name: 
     ml_confident = confidence is None or confidence >= MIN_ML_ALERT_CONFIDENCE
     category = predicted_category if ml_confident else "UNKNOWN"
     security_keyword_match = _is_security_keyword_match(message)
-    recent_errors = _recent_error_count(cursor, service_name)
-    recent_anomalies = _recent_anomaly_count(cursor, service_name)
+    recent_errors = _recent_error_count(cursor, service_name, organization_id)
+    recent_anomalies = _recent_anomaly_count(cursor, service_name, organization_id)
 
     reasons = []
     if predicted_severity in HIGH_SEVERITIES and ml_confident:
