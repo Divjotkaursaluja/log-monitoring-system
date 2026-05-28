@@ -13,3 +13,6 @@ shipper.*.log
 monitoring-agent/agent_state.json
 monitoring-agent/buffered_logs.jsonl
 monitoring-agent/*.spec
+monitoring-agent/build-package/
+monitoring-agent/dist-package/
+monitoring-agent/client-package/

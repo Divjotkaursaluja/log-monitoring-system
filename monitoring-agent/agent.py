@@ -21,11 +21,15 @@ STATE_FILE = APP_DIR / "agent_state.json"
 QUEUE_FILE = APP_DIR / "buffered_logs.jsonl"
 
 
-def load_config():
+def get_config_path():
     config_path = APP_DIR / "config.yaml"
     if not config_path.exists():
         config_path = BUNDLED_DIR / "config.yaml"
+    return config_path
 
+
+def load_config():
+    config_path = get_config_path()
     with open(config_path, "r", encoding="utf-8") as file:
         return yaml.safe_load(file)
 
@@ -42,6 +46,18 @@ REQUEST_TIMEOUT = int(CONFIG.get("request_timeout_seconds", 5))
 
 send_queue: queue.Queue[dict] = queue.Queue()
 stop_event = threading.Event()
+
+
+def config_identity():
+    return {
+        "backend_url": BACKEND_URL,
+        "service_name": SERVICE_NAME,
+        "organization_key": ORGANIZATION_KEY or "",
+    }
+
+
+def state_matches_config(state):
+    return state.get("config") == config_identity()
 
 
 def classify_log(line: str) -> str:
@@ -82,6 +98,14 @@ def auth_headers():
 def register_agent():
     state = load_state()
     if state.get("agent_id") and state.get("token"):
+        if not state_matches_config(state):
+            clear_state("config changed; registering under current organization")
+            state = {}
+        else:
+            print(f"Agent already registered: {state['agent_id']}")
+            return state
+
+    if state.get("agent_id") and state.get("token"):
         print(f"Agent already registered: {state['agent_id']}")
         return state
 
@@ -101,6 +125,7 @@ def register_agent():
     state = response.json()
     state["registered_at"] = datetime.utcnow().isoformat()
     state["platform"] = platform.platform()
+    state["config"] = config_identity()
     save_state(state)
     print(f"Registered agent: {state['agent_id']}")
     return state
@@ -251,6 +276,10 @@ def heartbeat_worker():
 
 
 def start_agent():
+    print(f"Agent directory: {APP_DIR}")
+    print(f"Config path: {get_config_path()}")
+    print(f"State path: {STATE_FILE}")
+    print(f"Buffer path: {QUEUE_FILE}")
     register_agent()
     load_disk_queue()
 
